@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>完全版テトリス</title>
+<style>
+  body {
+    background: #222;
+    color: #eee;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0;
+    height: 100vh;
+    justify-content: center;
+  }
+  canvas {
+    background: #111;
+    border: 3px solid #444;
+    display: block;
+    margin-bottom: 10px;
+  }
+  #score {
+    font-size: 1.2rem;
+    margin-bottom: 10px;
+  }
+  #level {
+    font-size: 1.1rem;
+    margin-bottom: 10px;
+  }
+  button {
+    padding: 8px 15px;
+    font-size: 1rem;
+    cursor: pointer;
+    border-radius: 5px;
+    border: none;
+    background: #444;
+    color: #eee;
+    transition: background 0.3s ease;
+  }
+  button:hover {
+    background: #666;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="game" width="240" height="400"></canvas>
+<div id="score">スコア: 0</div>
+<div id="level">レベル: 1</div>
+<button id="restart">リスタート</button>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreElem = document.getElementById('score');
+  const levelElem = document.getElementById('level');
+  const restartBtn = document.getElementById('restart');
+
+  const ROWS = 20;
+  const COLS = 10;
+  const BLOCK_SIZE = 20;
+
+  // 盤面の状態 0=空, 1-7 =ブロック番号
+  let board = [];
+
+  // テトリミノ定義（7種）
+  const SHAPES = [
+    [], // 0なし
+    [[1,1,1,1]], // I
+    [[2,2],[2,2]], // O
+    [[0,3,0],[3,3,3]], // T
+    [[4,4,0],[0,4,4]], // S
+    [[0,5,5],[5,5,0]], // Z
+    [[6,0,0],[6,6,6]], // J
+    [[0,0,7],[7,7,7]]  // L
+  ];
+
+  // 各ブロックの色
+  const COLORS = [
+    null,
+    '#00f0f0', // I: シアン
+    '#f0f000', // O: 黄
+    '#a000f0', // T: 紫
+    '#00f000', // S: 緑
+    '#f00000', // Z: 赤
+    '#0000f0', // J: 青
+    '#f09000'  // L: オレンジ
+  ];
+
+  // 現在のブロック情報
+  let currentPiece = null;
+  let currentX = 0;
+  let currentY = 0;
+
+  // ゲーム状態
+  let score = 0;
+  let level = 1;
+  let linesCleared = 0;
+  let dropInterval = 1000;
+  let dropCounter = 0;
+  let lastTime = 0;
+  let gameOverFlag = false;
+
+  // 盤面初期化
+  function resetBoard() {
+    board = [];
+    for(let r=0; r<ROWS; r++){
+      board.push(new Array(COLS).fill(0));
+    }
+  }
+
+  // ブロックを盤面に固定する
+  function placePiece() {
+    const shape = currentPiece;
+    for(let y=0; y<shape.length; y++){
+      for(let x=0; x<shape[y].length; x++){
+        if(shape[y][x]){
+          board[currentY + y][currentX + x] = shape[y][x];
+        }
+      }
+    }
+  }
+
+  // 衝突判定
+  function collide(piece, posX, posY){
+    for(let y=0; y<piece.length; y++){
+      for(let x=0; x<piece[y].length; x++){
+        if(piece[y][x]){
+          let newX = posX + x;
+          let newY = posY + y;
+          if(newX < 0 || newX >= COLS || newY >= ROWS) return true;
+          if(newY >= 0 && board[newY][newX]) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // ライン消去判定
+  function clearLines(){
+    let lines = 0;
+    outer: for(let y=ROWS-1; y>=0; y--){
+      for(let x=0; x<COLS; x++){
+        if(board[y][x] === 0){
+          continue outer;
+        }
+      }
+      // 一行揃ったら
+      const row = board.splice(y,1)[0].fill(0);
+      board.unshift(row);
+      lines++;
+      y++; // 同じ行を再度チェック
+    }
+    if(lines > 0){
+      linesCleared += lines;
+      score += lines * 100 * level;
+      // レベルアップ
+      if(linesCleared >= level * 10){
+        level++;
+        dropInterval = Math.max(100, 1000 - (level-1)*100);
+      }
+      scoreElem.textContent = `スコア: ${score}`;
+      levelElem.textContent = `レベル: ${level}`;
+    }
+  }
+
+  // ブロックの回転（90度時計回り）
+  function rotate(piece){
+    const N = piece.length;
+    let newPiece = [];
+    for(let x=0; x<N; x++){
+      newPiece[x] = [];
+      for(let y=N-1; y>=0; y--){
+        newPiece[x][N-1-y] = piece[y][x];
+      }
+    }
+    return newPiece;
+  }
+
+  // ブロック生成（ランダム）
+  function newPiece(){
+    const id = Math.floor(Math.random()*7)+1;
+    return SHAPES[id];
+  }
+
+  // 描画処理
+  function drawBlock(x,y,color){
+    ctx.fillStyle = color;
+    ctx.fillRect(x*BLOCK_SIZE, y*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x*BLOCK_SIZE, y*BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+  }
+
+  function drawBoard(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // 盤面のブロック描画
+    for(let y=0; y<ROWS; y++){
+      for(let x=0; x<COLS; x++){
+        if(board[y][x]){
+          drawBlock(x,y,COLORS[board[y][x]]);
+        }
+      }
+    }
+    // 現在のブロック描画
+    if(currentPiece){
+      for(let y=0; y<currentPiece.length; y++){
+        for(let x=0; x<currentPiece[y].length; x++){
+          if(currentPiece[y][x]){
+            let drawX = currentX + x;
+            let drawY = currentY + y;
+            if(drawY >= 0){
+              drawBlock(drawX, drawY, COLORS[currentPiece[y][x]]);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // ゲームオーバー判定
+  function checkGameOver(){
+    if(collide(currentPiece, currentX, currentY)){
+      gameOverFlag = true;
+      alert('ゲームオーバー！\nスコア: ' + score);
+    }
+  }
+
+  // 新しいブロックをセット
+  function spawnPiece(){
+    currentPiece = newPiece();
+    currentX = Math.floor((COLS - currentPiece[0].length) / 2);
+    currentY = -currentPiece.length;
+    checkGameOver();
+  }
+
+  // ゲームループ
+  function update(time=0){
+    if(gameOverFlag) return;
+    const deltaTime = time - lastTime;
+    lastTime = time;
+    dropCounter += deltaTime;
+    if(dropCounter > dropInterval){
+      dropCounter = 0;
+      moveDown();
+    }
+    drawBoard();
+    requestAnimationFrame(update);
+  }
+
+  // ブロックを1マス下に移動
+  function moveDown(){
+    if(!collide(currentPiece, currentX, currentY+1)){
+      currentY++;
+    } else {
+      // 固定
+      placePiece();
+      clearLines();
+      spawnPiece();
+    }
+  }
+
+  // 左右移動
+  function moveLeft(){
+    if(!collide(currentPiece, currentX-1, currentY)){
+      currentX--;
+    }
+  }
+  function moveRight(){
+    if(!collide(currentPiece, currentX+1, currentY)){
+      currentX++;
+    }
+  }
+
+  // 回転操作（衝突なら戻す）
+  function rotatePiece(){
+    const rotated = rotate(currentPiece);
+    if(!collide(rotated, currentX, currentY)){
+      currentPiece = rotated;
+    } else {
+      // 壁にぶつかった時のシフト処理（壁蹴り）
+      if(!collide(rotated, currentX - 1, currentY)){
+        currentX--;
+        currentPiece = rotated;
+      } else if(!collide(rotated, currentX +1, currentY)){
+        currentX++;
+        currentPiece = rotated;
+      }
+    }
+  }
+
+  // キーボード操作
+  document.addEventListener('keydown', e => {
+    if(gameOverFlag) return;
+    switch(e.key){
+      case 'ArrowLeft':
+        moveLeft();
+        break;
+      case 'ArrowRight':
+        moveRight();
+        break;
+      case 'ArrowDown':
+        moveDown();
+        break;
+      case 'ArrowUp':
+        rotatePiece();
+        break;
+      case ' ':
+        // スペースで即落下（ハードドロップ）
+        while(!collide(currentPiece, currentX, currentY+1)){
+          currentY++;
+        }
+        moveDown();
+        break;
+    }
+    drawBoard();
+  });
+
+  // リスタートボタン
+  restartBtn.addEventListener('click', () => {
+    resetGame();
+  });
+
+  // ゲーム初期化
+  function resetGame(){
+    resetBoard();
+    score = 0;
+    level = 1;
+    linesCleared = 0;
+    dropInterval = 1000;
+    dropCounter = 0;
+    gameOverFlag = false;
+    scoreElem.textContent = `スコア: ${score}`;
+    levelElem.textContent = `レベル: ${level}`;
+    spawnPiece();
+    drawBoard();
+    lastTime = 0;
+    requestAnimationFrame(update);
+  }
+
+  resetGame();
+
+})();
+</script>
+
+</body>
+</html>
